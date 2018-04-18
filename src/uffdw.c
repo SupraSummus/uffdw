@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <fcntl.h>
 #include <linux/userfaultfd.h>
 #include <pthread.h>
@@ -14,12 +13,28 @@
 #ifndef DEBUG
 	#define DEBUG false
 #endif
+#ifdef NDEBUG
+	#define DEBUG false
+#endif
 
 #if DEBUG
 	#define LOG(format, ...) do { fprintf(stderr, format "\n", ##__VA_ARGS__); } while (0)
 #else
 	#define LOG(...)
 #endif
+
+struct uffdw_data_t {
+	uffdw_handler_t handler;
+	void * handler_data;
+	int uffd;
+	pthread_t thread;
+	struct uffdw_list_t * children;
+};
+
+struct uffdw_list_t {
+	struct uffdw_data_t * uffdw;
+	struct uffdw_list_t * next;
+};
 
 static inline size_t _read_exact(int fd, void * buf, size_t size) {
 	off_t offset = 0;
@@ -32,22 +47,47 @@ static inline size_t _read_exact(int fd, void * buf, size_t size) {
 	return offset;
 }
 
+static void _uffdw_cleanup(struct uffdw_data_t * data) {
+	if (data == NULL) return;
+
+	// cancel all children
+	struct uffdw_list_t * child = data->children;
+	while (child != NULL) {
+		uffdw_cancel(child->uffdw);
+		struct uffdw_list_t * next = child->next;
+		free(child);
+		child = next;
+	}
+	data->children = NULL;
+
+	// close uffd
+	if (data->uffd >= 0) {
+		if (close(data->uffd) != 0) {
+			if (DEBUG) perror("there was a problem during closing userfaultfd descriptor");
+		}
+	}
+	data->uffd = -1;
+
+	free(data);
+}
+
 static void * _uffdw_run(void * _data) {
 	struct uffdw_data_t * data = _data;
 
-	while(true) {
+	while (true) {
 		struct uffd_msg msg;
 		if (read(data->uffd, &msg, sizeof(msg)) != sizeof(msg)) {
-			if (DEBUG) perror("failed to uffd read message");
+			if (DEBUG) perror("failed to read uffd message");
 			return NULL;
 		}
 
 		bool flag_write;
+		struct uffdw_data_t * new_data;
 
-		switch(msg.event) {
-			case UFFD_EVENT_PAGEFAULT:
+		switch (msg.event) {
+			case UFFD_EVENT_PAGEFAULT: {
 				flag_write = (msg.arg.pagefault.flags & UFFD_PAGEFAULT_FLAG_WRITE) != 0;
-				LOG("got PAGEFAULT (%p, FLAG_WRITE=%d)", (void *)msg.arg.pagefault.address, flag_write);
+				LOG("uffd %d: got PAGEFAULT (%p, FLAG_WRITE=%d)", data->uffd, (void *)msg.arg.pagefault.address, flag_write);
 				if (flag_write) {
 					LOG("error: write faults are not supported");
 					return NULL;
@@ -56,13 +96,35 @@ static void * _uffdw_run(void * _data) {
 				if(!data->handler(data->uffd, msg.arg.pagefault.address, data->handler_data)) {
 					LOG("error: uffdw handler failed");
 					return NULL;
-				};
+				}
 
 				break;
+			}
 
-			case UFFD_EVENT_FORK:
-				LOG("got FORK");
-				goto unsupported_message_type;
+			case UFFD_EVENT_FORK: {
+				LOG("uffd %d: got FORK (new uffd %d)", data->uffd, msg.arg.fork.ufd);
+
+				new_data = malloc(sizeof(struct uffdw_data_t));
+				new_data->handler = data->handler;
+				new_data->handler_data = data->handler_data;
+				new_data->uffd = msg.arg.fork.ufd;
+				new_data->children = NULL;
+
+				if (pthread_create(&(new_data->thread), NULL, _uffdw_run, new_data) != 0) {
+					if (DEBUG) perror("failed to create child uffdw thread");
+					_uffdw_cleanup(new_data);
+					return NULL;
+				}
+
+				// attach to children list
+				struct uffdw_list_t * child = malloc(sizeof(struct uffdw_list_t));
+				child->uffdw = new_data;
+				child->next = data->children;
+				data->children = child;
+
+				break;
+			}
+
 			case UFFD_EVENT_REMAP:
 				LOG("got REMAP");
 				goto unsupported_message_type;
@@ -81,11 +143,17 @@ static void * _uffdw_run(void * _data) {
 	}
 }
 
-bool uffdw_create(struct uffdw_data_t * data) {
+struct uffdw_data_t * uffdw_create(uffdw_handler_t handler, void * private_data) {
+	struct uffdw_data_t * data = malloc(sizeof(struct uffdw_data_t));
+	data->handler = handler;
+	data->handler_data = private_data;
+	data->uffd = -1;
+	data->children = NULL;
+
 	data->uffd = syscall(SYS_userfaultfd, O_CLOEXEC);
 	if (data->uffd < 0) {
 		if (DEBUG) perror("failed to open userfaultfd descriptor");
-		return false;
+		goto cleanup;
 	}
 
 	struct uffdio_api api_options;
@@ -102,33 +170,42 @@ bool uffdw_create(struct uffdw_data_t * data) {
 
 	if (ioctl(data->uffd, UFFDIO_API, &api_options) != 0) {
 		if (DEBUG) perror("failed to handshake with userfaultfd API");
-		close(data->uffd);
-		return false;
+		goto cleanup;
 	}
-	assert(api_options.ioctls & (1 << _UFFDIO_REGISTER));
+	if (!(api_options.ioctls & (1 << _UFFDIO_REGISTER))) {
+		LOG("got invalid response to uffd handshake");
+		goto cleanup;
+	}
 
 	if(pthread_create(&(data->thread), NULL, _uffdw_run, data)) {
 		if (DEBUG) perror("failed to create uffdw thread");
-		close(data->uffd);
-		return false;
+		goto cleanup;
 	}
 
-	return true;
+	return data;
+
+	cleanup:
+	_uffdw_cleanup(data);
+	return NULL;
 }
 
-void uffdw_destroy(struct uffdw_data_t * data) {
-	if (close(data->uffd) != 0) {
-		if (DEBUG) perror("there was a problem during closing userfaultfd descriptor");
-	}
-	data->uffd = -1;
+void uffdw_cancel(struct uffdw_data_t * data) {
+	LOG("uffd %d: canceling", data->uffd);
 
+	// cancel and wait for thread
 	if (pthread_cancel(data->thread) != 0) {
 		LOG("error: failed to cancel uffdw thread");
 	}
-	void * retval = NULL;
-	if (pthread_join(data->thread, &retval) != 0) {
+	if (pthread_join(data->thread, NULL) != 0) {
 		LOG("error: there was a problem during joining uffdw thread");
 	}
+
+	// clean thread structure
+	_uffdw_cleanup(data);
+}
+
+int uffdw_get_uffd(struct uffdw_data_t * data) {
+	return data->uffd;
 }
 
 bool uffdw_register(int uffd, size_t offset, size_t size) {

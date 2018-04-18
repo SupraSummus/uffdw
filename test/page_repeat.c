@@ -16,26 +16,22 @@ int main () {
 	void * the_page = malloc(getpagesize());
 	memcpy(the_page, "0123456789", 10);
 
+	struct uffdw_data_t * uffdw = uffdw_create(handler, the_page);
+
 	// mmap anonymous
 	void * addr = mmap(
 		NULL, getpagesize() * 10,
 		PROT_READ, MAP_SHARED | MAP_ANONYMOUS,
 		-1, 0
 	);
-
-	struct uffdw_data_t data;
-	data.handler = handler;
-	data.handler_data = the_page;
-
-	assert(uffdw_create(&data));
-	assert(uffdw_register(data.uffd, (size_t)addr, sysconf(_SC_PAGESIZE) * 10));
+	assert(uffdw_register(uffdw_get_uffd(uffdw), (size_t)addr, sysconf(_SC_PAGESIZE) * 10));
 
 	for (int i = 0; i < 10; i ++) {
 		assert(((char *)addr)[i * sysconf(_SC_PAGESIZE) + i] == '0' + i);
 		assert(((char *)addr)[i * sysconf(_SC_PAGESIZE) + 42] == (char)i);
 	}
 
-	uffdw_destroy(&data);
+	uffdw_cancel(uffdw);
 
 	return EXIT_SUCCESS;
 }

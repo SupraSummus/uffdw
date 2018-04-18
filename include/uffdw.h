@@ -1,20 +1,16 @@
 #ifndef UFFDW_H
 #define UFFDW_H
 
-#include <pthread.h>
 #include <stdbool.h>
 
 typedef bool (* uffdw_handler_t) (int uffd, size_t page_offset, void * private_data);
 
-struct uffdw_data_t {
-	uffdw_handler_t handler;
-	void * handler_data;
-	int uffd;
-	pthread_t thread;
-};
+struct uffdw_data_t;
 
-bool uffdw_create(struct uffdw_data_t * data);
-void uffdw_destroy(struct uffdw_data_t * data);
+struct uffdw_data_t * uffdw_create(uffdw_handler_t handler, void * private_data);
+void uffdw_cancel(struct uffdw_data_t * data);
+
+int uffdw_get_uffd(struct uffdw_data_t *);
 
 bool uffdw_register(int uffd, size_t offset, size_t size);
 
