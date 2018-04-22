@@ -16,7 +16,7 @@ int main () {
 	void * the_page = malloc(getpagesize());
 	memcpy(the_page, "0123456789", 10);
 
-	struct uffdw_data_t * uffdw = uffdw_create(handler, the_page);
+	struct uffdw_t * uffdw = uffdw_create(handler, the_page);
 
 	// mmap anonymous
 	void * addr = mmap(

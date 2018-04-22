@@ -3,14 +3,18 @@ INCLUDEDIR = include
 CFLAGS = -Wall -Wextra -I$(INCLUDEDIR) -lpthread -DDEBUG
 
 HEADERS = $(INCLUDEDIR)/uffdw.h
+TESTS = page_repeat fork
 
-all: build/test/page_repeat build/test/fork
+TEST_BINARIES = $(addprefix build/test/,$(TESTS))
 
-build/test/page_repeat: $(HEADERS) src/uffdw.c test/page_repeat.c
-	$(CC) $(CFLAGS) -o $@ src/uffdw.c test/page_repeat.c
+all: test
 
-build/test/fork: $(HEADERS) src/uffdw.c test/fork.c
-	$(CC) $(CFLAGS) -o $@ src/uffdw.c test/fork.c
+test: $(TEST_BINARIES)
+	for TEST in $(TEST_BINARIES); do $$TEST; done
+
+$(TEST_BINARIES): build/test/%: $(HEADERS) src/uffdw.c test/%.c
+	mkdir -p build/test
+	$(CC) $(CFLAGS) -o $@ src/uffdw.c test/$*.c
 
 clean:
-	rm -f build/test/page_repeat
+	rm -f build/test/*

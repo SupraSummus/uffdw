@@ -1,3 +1,4 @@
+#include <err.h>
 #include <fcntl.h>
 #include <linux/userfaultfd.h>
 #include <pthread.h>
@@ -23,7 +24,7 @@
 	#define LOG(...)
 #endif
 
-struct uffdw_data_t {
+struct uffdw_t {
 	uffdw_handler_t handler;
 	void * handler_data;
 	int uffd;
@@ -32,7 +33,7 @@ struct uffdw_data_t {
 };
 
 struct uffdw_list_t {
-	struct uffdw_data_t * uffdw;
+	struct uffdw_t * uffdw;
 	struct uffdw_list_t * next;
 };
 
@@ -47,7 +48,7 @@ static inline size_t _read_exact(int fd, void * buf, size_t size) {
 	return offset;
 }
 
-static void _uffdw_cleanup(struct uffdw_data_t * data) {
+static void _uffdw_cleanup(struct uffdw_t * data) {
 	if (data == NULL) return;
 
 	// cancel all children
@@ -63,7 +64,7 @@ static void _uffdw_cleanup(struct uffdw_data_t * data) {
 	// close uffd
 	if (data->uffd >= 0) {
 		if (close(data->uffd) != 0) {
-			if (DEBUG) perror("there was a problem during closing userfaultfd descriptor");
+			warn("there was a problem during closing userfaultfd descriptor");
 		}
 	}
 	data->uffd = -1;
@@ -72,7 +73,7 @@ static void _uffdw_cleanup(struct uffdw_data_t * data) {
 }
 
 static void * _uffdw_run(void * _data) {
-	struct uffdw_data_t * data = _data;
+	struct uffdw_t * data = _data;
 
 	while (true) {
 		struct uffd_msg msg;
@@ -82,7 +83,7 @@ static void * _uffdw_run(void * _data) {
 		}
 
 		bool flag_write;
-		struct uffdw_data_t * new_data;
+		struct uffdw_t * new_data;
 
 		switch (msg.event) {
 			case UFFD_EVENT_PAGEFAULT: {
@@ -104,7 +105,7 @@ static void * _uffdw_run(void * _data) {
 			case UFFD_EVENT_FORK: {
 				LOG("uffd %d: got FORK (new uffd %d)", data->uffd, msg.arg.fork.ufd);
 
-				new_data = malloc(sizeof(struct uffdw_data_t));
+				new_data = malloc(sizeof(struct uffdw_t));
 				new_data->handler = data->handler;
 				new_data->handler_data = data->handler_data;
 				new_data->uffd = msg.arg.fork.ufd;
@@ -143,8 +144,8 @@ static void * _uffdw_run(void * _data) {
 	}
 }
 
-struct uffdw_data_t * uffdw_create(uffdw_handler_t handler, void * private_data) {
-	struct uffdw_data_t * data = malloc(sizeof(struct uffdw_data_t));
+struct uffdw_t * uffdw_create(uffdw_handler_t handler, void * private_data) {
+	struct uffdw_t * data = malloc(sizeof(struct uffdw_t));
 	data->handler = handler;
 	data->handler_data = private_data;
 	data->uffd = -1;
@@ -189,22 +190,22 @@ struct uffdw_data_t * uffdw_create(uffdw_handler_t handler, void * private_data)
 	return NULL;
 }
 
-void uffdw_cancel(struct uffdw_data_t * data) {
+void uffdw_cancel(struct uffdw_t * data) {
 	LOG("uffd %d: canceling", data->uffd);
 
 	// cancel and wait for thread
 	if (pthread_cancel(data->thread) != 0) {
-		LOG("error: failed to cancel uffdw thread");
+		warn("failed to cancel uffdw thread");
 	}
 	if (pthread_join(data->thread, NULL) != 0) {
-		LOG("error: there was a problem during joining uffdw thread");
+		warn("there was a problem during joining uffdw thread");
 	}
 
 	// clean thread structure
 	_uffdw_cleanup(data);
 }
 
-int uffdw_get_uffd(struct uffdw_data_t * data) {
+int uffdw_get_uffd(struct uffdw_t * data) {
 	return data->uffd;
 }
 

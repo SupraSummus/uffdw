@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <uffdw.h>
 #include <unistd.h>
 
@@ -17,32 +18,42 @@ int main() {
 	void * the_page = malloc(page_size);
 	*((char *)the_page) = (char)0;
 
-	struct uffdw_data_t * uffdw = uffdw_create(handler, the_page);
+	struct uffdw_t * uffdw = uffdw_create(handler, the_page);
 	if (uffdw == NULL) abort();
 
-	// get 10 pages in conveniet area and reagister them to be handled by our thread
-	void * addr = mmap(
+	// get pages in conveniet area and reagister them to be handled by our thread
+	void * addr1 = mmap(
 		NULL, getpagesize() * 10,
 		PROT_READ, MAP_SHARED | MAP_ANONYMOUS,
 		-1, 0
 	);
+	void * addr2 = mmap(
+		NULL, getpagesize() * 10,
+		PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS,
+		-1, 0
+	);
 
-	if (!uffdw_register(uffdw_get_uffd(uffdw), (size_t)addr, sysconf(_SC_PAGESIZE) * 10)) abort();
+	if (!uffdw_register(uffdw_get_uffd(uffdw), (size_t)addr1, sysconf(_SC_PAGESIZE) * 10)) abort();
+	if (!uffdw_register(uffdw_get_uffd(uffdw), (size_t)addr2, sysconf(_SC_PAGESIZE) * 10)) abort();
 
 	// do some checks in child and parent
-	assert(((char *)addr)[page_size * 6] == 0);
+	assert(((char *)addr1)[page_size * 0] == 0);
+	assert(((char *)addr2)[page_size * 0] == 1);
 	int pid = fork();
 	if (pid == 0) {
-		assert(((char *)addr)[page_size * 6] == 0);
-		assert(((char *)addr)[page_size * 3] == 1);
-		assert(((char *)addr)[page_size * 4] == 2);
+		assert(((char *)addr1)[page_size * 0] == 0);
+		assert(((char *)addr1)[page_size * 1] == 2);
+		assert(((char *)addr2)[page_size * 0] == 1);
+		assert(((char *)addr2)[page_size * 1] == 3);
 		return EXIT_SUCCESS;
 
 	} else {
 		int s;
 		if (waitpid(pid, &s, 0) != pid) abort();
-		assert(((char *)addr)[page_size * 3] == 1);
-		assert(((char *)addr)[page_size * 5] == 3);
+		assert(((char *)addr1)[page_size * 1] == 2);
+		assert(((char *)addr1)[page_size * 2] == 4);
+		assert(((char *)addr2)[page_size * 1] == 5);
+		assert(((char *)addr2)[page_size * 2] == 6);
 		uffdw_cancel(uffdw);
 		return s;
 	}
