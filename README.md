@@ -1,7 +1,7 @@
 uffdw
 =====
 
-"uffdw" stands for "userfaultfd wrapper". "userfaultfd" is linux kernel API for handling page faults in userspace. With use of it you can do cross-machine process migration or lazily map blobs into address space.
+"uffdw" stands for "userfaultfd wrapper". "userfaultfd" is linux kernel API for handling page faults in userspace. With use of it you can lazily and transparently map blobs (yeah, executables too) into address space and don't get killed by raw uffd API in the process.
 
 This project is in "playground" state.
 
