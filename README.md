@@ -15,4 +15,5 @@ For example use take a look at tests (eg `test/page_repeat.c`).
 See also
 --------
 
-* `man 2 userfaultfd`
+* [`man 2 userfaultfd`](http://man7.org/linux/man-pages/man2/userfaultfd.2.html)
+* [Documentation/vm/userfaultfd.txt](https://www.kernel.org/doc/Documentation/vm/userfaultfd.txt) in kernel source tree
