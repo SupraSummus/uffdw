@@ -5,8 +5,9 @@
 #include <uffdw.h>
 #include <unistd.h>
 
-bool handler(int uffd, size_t page, void * the_page) {
-	bool r = uffdw_copy(uffd, the_page, page, sysconf(_SC_PAGESIZE));
+bool handler(int uffd, size_t page, size_t page_original, void * the_page) {
+	(void)page;
+	bool r = uffdw_copy(uffd, the_page, page_original, sysconf(_SC_PAGESIZE));
 	((char *)the_page)[0] ++;
 	return r;
 }
@@ -18,7 +19,7 @@ int main() {
 	void * the_page = malloc(page_size);
 	*((char *)the_page) = (char)0;
 
-	struct uffdw_t * uffdw = uffdw_create(handler, the_page);
+	struct uffdw_t * uffdw = uffdw_create();
 	if (uffdw == NULL) abort();
 
 	// get pages in conveniet area and reagister them to be handled by our thread
@@ -33,8 +34,8 @@ int main() {
 		-1, 0
 	);
 
-	if (!uffdw_register(uffdw_get_uffd(uffdw), (size_t)addr1, sysconf(_SC_PAGESIZE) * 10)) abort();
-	if (!uffdw_register(uffdw_get_uffd(uffdw), (size_t)addr2, sysconf(_SC_PAGESIZE) * 10)) abort();
+	if (!uffdw_register(uffdw, (size_t)addr1, sysconf(_SC_PAGESIZE) * 10, handler, the_page)) abort();
+	if (!uffdw_register(uffdw, (size_t)addr2, sysconf(_SC_PAGESIZE) * 10, handler, the_page)) abort();
 
 	// do some checks in child and parent
 	assert(((char *)addr1)[page_size * 0] == 0);

@@ -10,7 +10,7 @@ API
 
 See `include/uffdw.h`.
 
-For example use take a look at tests (eg `test/page_repeat.c`).
+For example use take a look at tests (eg `test/basic.c`).
 
 See also
 --------
