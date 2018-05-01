@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <err.h>
 #include <fcntl.h>
 #include <linux/userfaultfd.h>
@@ -31,12 +32,8 @@ struct uffdw_t {
 	long pagesize;
 
 	struct uffdw_range_t * ranges;
-	struct uffdw_list_t * children;
-};
-
-struct uffdw_list_t {
-	struct uffdw_t * uffdw;
-	struct uffdw_list_t * next;
+	struct uffdw_t * children;
+	struct uffdw_t * next;
 };
 
 struct uffdw_range_t {
@@ -80,11 +77,10 @@ static void _uffdw_cleanup(struct uffdw_t * data) {
 	if (data == NULL) return;
 
 	// cancel all children
-	struct uffdw_list_t * child = data->children;
+	struct uffdw_t * child = data->children;
 	while (child != NULL) {
-		uffdw_cancel(child->uffdw);
-		struct uffdw_list_t * next = child->next;
-		free(child);
+		struct uffdw_t * next = child->next;
+		uffdw_cancel(child);
 		child = next;
 	}
 	data->children = NULL;
@@ -108,13 +104,10 @@ static void _uffdw_cleanup(struct uffdw_t * data) {
 	free(data);
 }
 
-static struct uffdw_list_t * _uffdw_attach_child(struct uffdw_t * parent, struct uffdw_t * child) {
-	struct uffdw_list_t * list = malloc(sizeof(struct uffdw_list_t));
-	if (list == NULL) return NULL;
-	list->next = parent->children;
-	list->uffdw = child;
-	parent->children = list;
-	return list;
+static inline void _uffdw_attach_child(struct uffdw_t * parent, struct uffdw_t * child) {
+	assert(child->next == NULL);
+	child->next = parent->children;
+	parent->children = child;
 }
 
 static inline struct uffdw_range_t * _uffdw_attach_range(
@@ -209,10 +202,7 @@ static void * _uffdw_run(void * _uffdw) {
 				}
 
 				// attach to children list
-				if (_uffdw_attach_child(uffdw, new_uffdw) == NULL) {
-					_uffdw_cleanup(new_uffdw);
-					return NULL;
-				}
+				_uffdw_attach_child(uffdw, new_uffdw);
 
 				// run thread
 				if (pthread_create(&(new_uffdw->thread), NULL, _uffdw_run, new_uffdw) != 0) {
