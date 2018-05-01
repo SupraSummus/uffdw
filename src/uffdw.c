@@ -42,7 +42,7 @@ struct uffdw_range_t {
 	void * handler_data;
 
 	size_t offset;
-	size_t size;
+	size_t end;
 
 	/* access to addr `offset + i` is presented to handler as access to `handler_offset + i` */
 	size_t handler_offset;
@@ -59,6 +59,32 @@ static inline size_t _read_exact(int fd, void * buf, size_t size) {
 		offset += read_result;
 	}
 	return offset;
+}
+
+static inline size_t _min(size_t a, size_t b) {
+	if (a <= b) return a;
+	return b;
+}
+
+static inline size_t _max(size_t a, size_t b) {
+	if (a >= b) return a;
+	return b;
+}
+
+static inline size_t _ranges_overlap(
+	size_t off_a, size_t end_a,
+	size_t off_b, size_t end_b,
+	size_t * off, size_t * end
+) {
+	size_t _off = _max(off_a, off_b);
+	size_t _end = _min(end_a, end_b);
+	if (_off < _end) {
+		if (off != NULL) *off = _off;
+		if (end != NULL) *end = _end;
+		return _end - _off;
+	} else {
+		return 0;
+	}
 }
 
 static inline struct uffdw_t * _uffdw_alloc(void) {
@@ -110,34 +136,76 @@ static inline void _uffdw_attach_child(struct uffdw_t * parent, struct uffdw_t *
 	parent->children = child;
 }
 
-static inline struct uffdw_range_t * _uffdw_attach_range(
+static inline struct uffdw_range_t * _uffdw_get_range(
+	struct uffdw_t * uffdw, size_t offset, size_t end
+) {
+	for (
+		struct uffdw_range_t * range = uffdw->ranges;
+		range != NULL;
+		range = range->next
+	) {
+		if ((_ranges_overlap(range->offset, range->end, offset, end, NULL, NULL)) > 0) {
+			return range;
+		}
+	}
+	return NULL;
+}
+
+static inline bool _uffdw_add_range(
 	struct uffdw_t * uffdw,
-	size_t offset, size_t size, size_t handler_offset,
+	size_t offset, size_t end, size_t handler_offset,
 	uffdw_handler_t handler, void * private_data
 ) {
+	assert(offset <= end);
+	if (end == offset) return true;
+	assert(_uffdw_get_range(uffdw, offset, end) == NULL);
+
 	struct uffdw_range_t * range = malloc(sizeof(struct uffdw_range_t));
-	if (range == NULL) return NULL;
+	if (range == NULL) return false;
+
 	range->offset = offset;
-	range->size = size;
+	range->end = end;
 	range->handler_offset = handler_offset;
 	range->handler = handler;
 	range->handler_data = private_data;
 	range->next = uffdw->ranges;
 	uffdw->ranges = range;
-	return range;
+
+	return true;
 }
 
-static inline struct uffdw_range_t * _uffdw_get_range(
-	struct uffdw_t * uffdw, size_t offset
+static inline void _uffdw_remove_range(
+	struct uffdw_t * uffdw, size_t offset, size_t end
 ) {
-	struct uffdw_range_t * range = uffdw->ranges;
-	while (range != NULL) {
-		if (range->offset <= offset && range->offset + range->size > offset) {
-			return range;
+	struct uffdw_range_t * * range_p = &(uffdw->ranges);
+	while (*range_p != NULL) {
+		struct uffdw_range_t * range  = *range_p;
+		size_t o, e;
+		size_t s = _ranges_overlap(range->offset, range->end, offset, end, &o, &e);
+		if (s > 0) {
+			// unlink previous range
+			*range_p = range->next;
+			range->next = NULL;
+
+			// add split ranges
+			if (
+				!_uffdw_add_range(
+					uffdw,
+					range->offset, o, range->handler_offset,
+					range->handler, range->handler_data
+				) ||
+				!_uffdw_add_range(
+					uffdw,
+					e, range->end, range->handler_offset - range->offset + e,
+					range->handler, range->handler_data
+				)
+			) warnx("failed to add split ranges");
+
+			free(range);
+		} else {
+			range_p = &(range->next);
 		}
-		range = range->next;
 	}
-	return NULL;
 }
 
 static void * _uffdw_run(void * _uffdw) {
@@ -162,7 +230,10 @@ static void * _uffdw_run(void * _uffdw) {
 					return NULL;
 				}
 
-				struct uffdw_range_t * range = _uffdw_get_range(uffdw, msg.arg.pagefault.address);
+				struct uffdw_range_t * range = _uffdw_get_range(
+					uffdw,
+					msg.arg.pagefault.address, msg.arg.pagefault.address + 1
+				);
 				if (range == NULL) {
 					warnx("uffd %d: PAGEFAULT on non registered page %p", uffdw->uffd, (void *)msg.arg.pagefault.address);
 					uffdw_zeropage(uffdw->uffd, msg.arg.pagefault.address, uffdw->pagesize);
@@ -189,9 +260,9 @@ static void * _uffdw_run(void * _uffdw) {
 				new_uffdw->uffd = msg.arg.fork.ufd;
 				struct uffdw_range_t * range = uffdw->ranges;
 				while (range != NULL) {
-					if (!_uffdw_attach_range(
+					if (!_uffdw_add_range(
 						new_uffdw,
-						range->offset, range->size, range->handler_offset,
+						range->offset, range->end, range->handler_offset,
 						range->handler, range->handler_data
 					)) {
 						warn("failed to store range data");
@@ -220,13 +291,16 @@ static void * _uffdw_run(void * _uffdw) {
 					(size_t)msg.arg.remap.len, (void *)msg.arg.remap.from, (void *)msg.arg.remap.to
 				);
 
-				struct uffdw_range_t * range = _uffdw_get_range(uffdw, msg.arg.remap.from);
+				struct uffdw_range_t * range = _uffdw_get_range(
+					uffdw,
+					msg.arg.remap.from, msg.arg.remap.from + 1
+				);
 				if (range == NULL) {
-					warnx("uffd %d: REMAP on non registered page %p", uffdw->uffd, (void *)msg.arg.remap.from);
+					warnx("uffd %d: REMAP on non registered addr %p", uffdw->uffd, (void *)msg.arg.remap.from);
 				} else {
-					if (!_uffdw_attach_range(
+					if (!_uffdw_add_range(
 						uffdw,
-						msg.arg.remap.to, msg.arg.remap.len, msg.arg.remap.from,
+						msg.arg.remap.to, msg.arg.remap.to + msg.arg.remap.len, msg.arg.remap.from,
 						range->handler, range->handler_data
 					)) warnx("uffd %d: failed to store range data", uffdw->uffd);
 				}
@@ -235,14 +309,17 @@ static void * _uffdw_run(void * _uffdw) {
 			}
 
 			case UFFD_EVENT_REMOVE: {
-				LOG("uffd %d: got REMOVE", uffdw->uffd);
+				LOG("uffd %d: got REMOVE (%p - %p)", uffdw->uffd, (void *)msg.arg.remove.start, (void *)msg.arg.remove.end);
 				warnx("UFFD_EVENT_REMOVE handling not implemented yet");
 				break;
 			}
 
 			case UFFD_EVENT_UNMAP: {
 				LOG("uffd %d: got UNMAP (%p - %p)", uffdw->uffd, (void *)msg.arg.remove.start, (void *)msg.arg.remove.end);
-				warnx("UFFD_EVENT_UNMAP handling not implemented yet");
+				_uffdw_remove_range(
+					uffdw,
+					msg.arg.remove.start, msg.arg.remove.end
+				);
 				break;
 			}
 
@@ -335,12 +412,11 @@ bool uffdw_register(
 	LOG("uffd %d: register %p - %p", uffdw->uffd, (void *)offset, (void *)(offset + size));
 
 	// alloc and attach range structure
-	struct uffdw_range_t * range = _uffdw_attach_range(
+	if (!_uffdw_add_range(
 		uffdw,
-		offset, size, handler_offset,
+		offset, offset + size, handler_offset,
 		handler, private_data
-	);
-	if (range == NULL) {
+	)) {
 		warn("failed to store uffdw range data");
 		return false;
 	}
@@ -355,8 +431,7 @@ bool uffdw_register(
 	// do syscall
 	if (ioctl(uffdw->uffd, UFFDIO_REGISTER, &reg) != 0) {
 		warn("uffd register syscall failed");
-		uffdw->ranges = range->next;
-		free(range);
+		_uffdw_remove_range(uffdw, offset, offset + size);
 		return false;
 	}
 
