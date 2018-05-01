@@ -27,7 +27,11 @@ int main () {
 		-1, 0
 	);
 	if (addr == (void *)-1) err(EXIT_FAILURE, "failed to map main range");
-	if (!uffdw_register(uffdw, (size_t)addr, page_size * 10, handler, the_page)) abort();
+	if (!uffdw_register(
+		uffdw,
+		(size_t)addr, page_size * 10, (size_t)addr,
+		handler, the_page
+	)) abort();
 
 	assert(((char *)addr)[1 * page_size] == 1);
 

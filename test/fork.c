@@ -34,8 +34,16 @@ int main() {
 		-1, 0
 	);
 
-	if (!uffdw_register(uffdw, (size_t)addr1, sysconf(_SC_PAGESIZE) * 10, handler, the_page)) abort();
-	if (!uffdw_register(uffdw, (size_t)addr2, sysconf(_SC_PAGESIZE) * 10, handler, the_page)) abort();
+	if (!uffdw_register(
+		uffdw,
+		(size_t)addr1, sysconf(_SC_PAGESIZE) * 10, (size_t)addr1,
+		handler, the_page
+	)) abort();
+	if (!uffdw_register(
+		uffdw,
+		(size_t)addr2, sysconf(_SC_PAGESIZE) * 10, (size_t)addr2,
+		handler, the_page
+	)) abort();
 
 	// do some checks in child and parent
 	assert(((char *)addr1)[page_size * 0] == 0);

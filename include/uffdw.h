@@ -27,9 +27,22 @@ void uffdw_cancel(struct uffdw_t * data);
 
 int _uffdw_get_uffd(struct uffdw_t *);
 
-bool uffdw_register(struct uffdw_t * uffdw, size_t offset, size_t size, uffdw_handler_t handler, void * private_data);
+/**
+ * Register memmory range for handling.
+ *
+ * Pagefault at `offset + i` will be presented to handler as pagefault
+ * at `handler_offset + i`.
+ */
+bool uffdw_register(
+	struct uffdw_t * uffdw,
+	size_t offset, size_t size, size_t handler_offset,
+	uffdw_handler_t handler, void * private_data
+);
 //bool uffdw_unregister(int uffd, size_t offset, size_t size);
 
+/**
+ * Functions operating on raw userfault file descriptor.
+ */
 bool uffdw_copy(int uffd, void * our_offset, size_t target_offset, size_t size);
 bool uffdw_copy_from_fd(int uffd, int fd, size_t offset, size_t size);
 bool uffdw_zeropage(int uffd, size_t offset, size_t size);

@@ -329,7 +329,7 @@ int _uffdw_get_uffd(struct uffdw_t * data) {
 
 bool uffdw_register(
 	struct uffdw_t * uffdw,
-	size_t offset, size_t size,
+	size_t offset, size_t size, size_t handler_offset,
 	uffdw_handler_t handler, void * private_data
 ) {
 	LOG("uffd %d: register %p - %p", uffdw->uffd, (void *)offset, (void *)(offset + size));
@@ -337,7 +337,7 @@ bool uffdw_register(
 	// alloc and attach range structure
 	struct uffdw_range_t * range = _uffdw_attach_range(
 		uffdw,
-		offset, size, offset,
+		offset, size, handler_offset,
 		handler, private_data
 	);
 	if (range == NULL) {

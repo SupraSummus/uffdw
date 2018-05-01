@@ -27,7 +27,11 @@ int main () {
 		PROT_READ, MAP_SHARED | MAP_ANONYMOUS,
 		-1, 0
 	);
-	if (!uffdw_register(uffdw, (size_t)addr, sysconf(_SC_PAGESIZE) * 10, handler, the_page)) abort();
+	if (!uffdw_register(
+		uffdw,
+		(size_t)addr, sysconf(_SC_PAGESIZE) * 10, (size_t)addr,
+		handler, the_page
+	)) abort();
 
 	for (int i = 0; i < 10; i ++) {
 		assert(((char *)addr)[i * sysconf(_SC_PAGESIZE) + i] == '0' + i);
