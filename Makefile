@@ -3,7 +3,7 @@ INCLUDEDIR = include
 CFLAGS = -Wall -Wextra -I$(INCLUDEDIR) -lpthread -DDEBUG
 
 HEADERS = $(INCLUDEDIR)/uffdw.h
-TESTS = basic fork remap
+TESTS = basic fork remap unmap
 
 TEST_BINARIES = $(addprefix build/test/,$(TESTS))
 

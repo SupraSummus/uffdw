@@ -28,6 +28,7 @@
 struct uffdw_t {
 	int uffd;
 	pthread_t thread;
+	pthread_mutex_t mutex;
 
 	long pagesize;
 
@@ -95,6 +96,10 @@ static inline struct uffdw_t * _uffdw_alloc(void) {
 	// TODO uffdw->thread
 	uffdw->children = NULL;
 	uffdw->ranges = NULL;
+	if (pthread_mutex_init(&uffdw->mutex, NULL) != 0) {
+		free(uffdw);
+		return NULL;
+	}
 
 	return uffdw;
 }
@@ -126,6 +131,9 @@ static void _uffdw_cleanup(struct uffdw_t * data) {
 		free(range);
 		range = next;
 	}
+
+	// free mutex
+	if (pthread_mutex_destroy(&data->mutex) != 0) warnx("failed to destroy mutex");
 
 	free(data);
 }
@@ -221,12 +229,18 @@ static void * _uffdw_run(void * _uffdw) {
 		bool flag_write;
 		struct uffdw_t * new_uffdw;
 
+		if (pthread_mutex_lock(&uffdw->mutex) != 0) {
+			warnx("failed to acquire lock");
+			return NULL;
+		}
+
 		switch (msg.event) {
 			case UFFD_EVENT_PAGEFAULT: {
 				flag_write = (msg.arg.pagefault.flags & UFFD_PAGEFAULT_FLAG_WRITE) != 0;
 				LOG("uffd %d: got PAGEFAULT (%p, FLAG_WRITE=%d)", uffdw->uffd, (void *)msg.arg.pagefault.address, flag_write);
 				if (flag_write) {
 					LOG("error: write faults are not supported");
+					pthread_mutex_unlock(&uffdw->mutex);
 					return NULL;
 				}
 
@@ -245,6 +259,7 @@ static void * _uffdw_run(void * _uffdw) {
 						range->handler_data
 					)) {
 						LOG("error: uffdw handler failed");
+						pthread_mutex_unlock(&uffdw->mutex);
 						return NULL;
 					}
 				}
@@ -267,6 +282,7 @@ static void * _uffdw_run(void * _uffdw) {
 					)) {
 						warn("failed to store range data");
 						_uffdw_cleanup(new_uffdw);
+						pthread_mutex_unlock(&uffdw->mutex);
 						return NULL;
 					}
 					range = range->next;
@@ -279,6 +295,7 @@ static void * _uffdw_run(void * _uffdw) {
 				if (pthread_create(&(new_uffdw->thread), NULL, _uffdw_run, new_uffdw) != 0) {
 					if (DEBUG) perror("failed to create child uffdw thread");
 					_uffdw_cleanup(new_uffdw);
+					pthread_mutex_unlock(&uffdw->mutex);
 					return NULL;
 				}
 
@@ -325,9 +342,12 @@ static void * _uffdw_run(void * _uffdw) {
 
 			default: {
 				LOG("uffd %d: error: got unsupported message type", uffdw->uffd);
+				pthread_mutex_unlock(&uffdw->mutex);
 				return NULL;
 			}
 		}
+
+		pthread_mutex_unlock(&uffdw->mutex);
 
 	}
 }
@@ -411,6 +431,11 @@ bool uffdw_register(
 ) {
 	LOG("uffd %d: register %p - %p", uffdw->uffd, (void *)offset, (void *)(offset + size));
 
+	if (pthread_mutex_lock(&uffdw->mutex) != 0) {
+		warnx("failed to acquire lock");
+		return false;
+	}
+
 	// alloc and attach range structure
 	if (!_uffdw_add_range(
 		uffdw,
@@ -418,6 +443,7 @@ bool uffdw_register(
 		handler, private_data
 	)) {
 		warn("failed to store uffdw range data");
+		pthread_mutex_unlock(&uffdw->mutex);
 		return false;
 	}
 
@@ -432,9 +458,11 @@ bool uffdw_register(
 	if (ioctl(uffdw->uffd, UFFDIO_REGISTER, &reg) != 0) {
 		warn("uffd register syscall failed");
 		_uffdw_remove_range(uffdw, offset, offset + size);
+		pthread_mutex_unlock(&uffdw->mutex);
 		return false;
 	}
 
+	pthread_mutex_unlock(&uffdw->mutex);
 	return true;
 }
 
